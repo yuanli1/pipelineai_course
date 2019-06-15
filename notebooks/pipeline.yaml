@@ -1,0 +1,230 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: calculation-pipeline-
+spec:
+  arguments:
+    parameters:
+    - name: a
+      value: a
+    - name: b
+      value: '7'
+    - name: c
+      value: '17'
+  entrypoint: calculation-pipeline
+  serviceAccountName: pipeline-runner
+  templates:
+  - container:
+      args:
+      - '{{inputs.parameters.a}}'
+      - '4'
+      - /outputs/Output/data
+      command:
+      - python3
+      - -c
+      - "def add_fn(a: float, b: float) -> float:\n   '''Calculates sum of two arguments'''\n\
+        \   return a + b\n\nimport sys\n_args = {\n    'a': float(sys.argv[1]),\n\
+        \    'b': float(sys.argv[2]),\n}\n_output_files = [\n    sys.argv[3],\n]\n\
+        \n_outputs = add_fn(**_args)\n\nif not hasattr(_outputs, '__getitem__') or\
+        \ isinstance(_outputs, str):\n    _outputs = [_outputs]\n\nfrom pathlib import\
+        \ Path\nfor idx, filename in enumerate(_output_files):\n    _output_path =\
+        \ Path(filename)\n    _output_path.parent.mkdir(parents=True, exist_ok=True)\n\
+        \    _output_path.write_text(str(_outputs[idx]))\n"
+      image: tensorflow/tensorflow:1.11.0-py3
+    inputs:
+      parameters:
+      - name: a
+    name: add-fn
+    outputs:
+      artifacts:
+      - name: mlpipeline-ui-metadata
+        path: /mlpipeline-ui-metadata.json
+        s3:
+          accessKeySecret:
+            key: accesskey
+            name: mlpipeline-minio-artifact
+          bucket: mlpipeline
+          endpoint: minio-service.kubeflow:9000
+          insecure: true
+          key: runs/{{workflow.uid}}/{{pod.name}}/mlpipeline-ui-metadata.tgz
+          secretKeySecret:
+            key: secretkey
+            name: mlpipeline-minio-artifact
+      - name: mlpipeline-metrics
+        path: /mlpipeline-metrics.json
+        s3:
+          accessKeySecret:
+            key: accesskey
+            name: mlpipeline-minio-artifact
+          bucket: mlpipeline
+          endpoint: minio-service.kubeflow:9000
+          insecure: true
+          key: runs/{{workflow.uid}}/{{pod.name}}/mlpipeline-metrics.tgz
+          secretKeySecret:
+            key: secretkey
+            name: mlpipeline-minio-artifact
+      parameters:
+      - name: add-fn-output
+        valueFrom:
+          path: /outputs/Output/data
+  - container:
+      args:
+      - '{{inputs.parameters.div-fn-quotient}}'
+      - '{{inputs.parameters.c}}'
+      - /outputs/Output/data
+      command:
+      - python3
+      - -c
+      - "def add_fn(a: float, b: float) -> float:\n   '''Calculates sum of two arguments'''\n\
+        \   return a + b\n\nimport sys\n_args = {\n    'a': float(sys.argv[1]),\n\
+        \    'b': float(sys.argv[2]),\n}\n_output_files = [\n    sys.argv[3],\n]\n\
+        \n_outputs = add_fn(**_args)\n\nif not hasattr(_outputs, '__getitem__') or\
+        \ isinstance(_outputs, str):\n    _outputs = [_outputs]\n\nfrom pathlib import\
+        \ Path\nfor idx, filename in enumerate(_output_files):\n    _output_path =\
+        \ Path(filename)\n    _output_path.parent.mkdir(parents=True, exist_ok=True)\n\
+        \    _output_path.write_text(str(_outputs[idx]))\n"
+      image: tensorflow/tensorflow:1.11.0-py3
+    inputs:
+      parameters:
+      - name: c
+      - name: div-fn-quotient
+    name: add-fn-2
+    outputs:
+      artifacts:
+      - name: mlpipeline-ui-metadata
+        path: /mlpipeline-ui-metadata.json
+        s3:
+          accessKeySecret:
+            key: accesskey
+            name: mlpipeline-minio-artifact
+          bucket: mlpipeline
+          endpoint: minio-service.kubeflow:9000
+          insecure: true
+          key: runs/{{workflow.uid}}/{{pod.name}}/mlpipeline-ui-metadata.tgz
+          secretKeySecret:
+            key: secretkey
+            name: mlpipeline-minio-artifact
+      - name: mlpipeline-metrics
+        path: /mlpipeline-metrics.json
+        s3:
+          accessKeySecret:
+            key: accesskey
+            name: mlpipeline-minio-artifact
+          bucket: mlpipeline
+          endpoint: minio-service.kubeflow:9000
+          insecure: true
+          key: runs/{{workflow.uid}}/{{pod.name}}/mlpipeline-metrics.tgz
+          secretKeySecret:
+            key: secretkey
+            name: mlpipeline-minio-artifact
+      parameters:
+      - name: add-fn-2-output
+        valueFrom:
+          path: /outputs/Output/data
+  - dag:
+      tasks:
+      - arguments:
+          parameters:
+          - name: a
+            value: '{{inputs.parameters.a}}'
+        name: add-fn
+        template: add-fn
+      - arguments:
+          parameters:
+          - name: c
+            value: '{{inputs.parameters.c}}'
+          - name: div-fn-quotient
+            value: '{{tasks.div-fn.outputs.parameters.div-fn-quotient}}'
+        dependencies:
+        - div-fn
+        name: add-fn-2
+        template: add-fn-2
+      - arguments:
+          parameters:
+          - name: add-fn-output
+            value: '{{tasks.add-fn.outputs.parameters.add-fn-output}}'
+          - name: b
+            value: '{{inputs.parameters.b}}'
+        dependencies:
+        - add-fn
+        name: div-fn
+        template: div-fn
+    inputs:
+      parameters:
+      - name: a
+      - name: b
+      - name: c
+    name: calculation-pipeline
+  - container:
+      args:
+      - '{{inputs.parameters.add-fn-output}}'
+      - '{{inputs.parameters.b}}'
+      - /
+      - /outputs/quotient/data
+      - /outputs/remainder/data
+      command:
+      - python3
+      - -c
+      - "from typing import NamedTuple\n\ndef div_fn(dividend: float, divisor:float,\
+        \ output_dir:str = './') -> NamedTuple('DivOutput', [('quotient', float),\
+        \ ('remainder', float)]):\n    '''Divides two numbers and calculate  the quotient\
+        \ and remainder'''\n    #Imports inside a component function:\n    import\
+        \ numpy as np\n\n    #This function demonstrates how to use nested functions\
+        \ inside a component function:\n    def nested_div_helper(dividend, divisor):\n\
+        \        return np.divmod(dividend, divisor)\n\n    (quotient, remainder)\
+        \ = nested_div_helper(dividend, divisor)\n\n    from tensorflow.python.lib.io\
+        \ import file_io\n    import json\n    \n    # Exports two sample metrics:\n\
+        \    metrics = {\n      'metrics': [{\n          'name': 'quotient',\n   \
+        \       'numberValue':  float(quotient),\n        },{\n          'name': 'remainder',\n\
+        \          'numberValue':  float(remainder),\n        }]}\n\n    with file_io.FileIO(output_dir\
+        \ + 'mlpipeline-metrics.json', 'w') as f:\n        json.dump(metrics, f)\n\
+        \n    from collections import namedtuple\n    output = namedtuple('DivOutput',\
+        \ ['quotient', 'remainder'])\n    return output(quotient, remainder)\n\nimport\
+        \ sys\n_args = {\n    'dividend': float(sys.argv[1]),\n    'divisor': float(sys.argv[2]),\n\
+        \    'output_dir': str(sys.argv[3]),\n}\n_output_files = [\n    sys.argv[4],\n\
+        \    sys.argv[5],\n]\n\n_outputs = div_fn(**_args)\n\nif not hasattr(_outputs,\
+        \ '__getitem__') or isinstance(_outputs, str):\n    _outputs = [_outputs]\n\
+        \nfrom pathlib import Path\nfor idx, filename in enumerate(_output_files):\n\
+        \    _output_path = Path(filename)\n    _output_path.parent.mkdir(parents=True,\
+        \ exist_ok=True)\n    _output_path.write_text(str(_outputs[idx]))\n"
+      image: tensorflow/tensorflow:1.11.0-py3
+    inputs:
+      parameters:
+      - name: add-fn-output
+      - name: b
+    name: div-fn
+    outputs:
+      artifacts:
+      - name: mlpipeline-ui-metadata
+        path: /mlpipeline-ui-metadata.json
+        s3:
+          accessKeySecret:
+            key: accesskey
+            name: mlpipeline-minio-artifact
+          bucket: mlpipeline
+          endpoint: minio-service.kubeflow:9000
+          insecure: true
+          key: runs/{{workflow.uid}}/{{pod.name}}/mlpipeline-ui-metadata.tgz
+          secretKeySecret:
+            key: secretkey
+            name: mlpipeline-minio-artifact
+      - name: mlpipeline-metrics
+        path: /mlpipeline-metrics.json
+        s3:
+          accessKeySecret:
+            key: accesskey
+            name: mlpipeline-minio-artifact
+          bucket: mlpipeline
+          endpoint: minio-service.kubeflow:9000
+          insecure: true
+          key: runs/{{workflow.uid}}/{{pod.name}}/mlpipeline-metrics.tgz
+          secretKeySecret:
+            key: secretkey
+            name: mlpipeline-minio-artifact
+      parameters:
+      - name: div-fn-quotient
+        valueFrom:
+          path: /outputs/quotient/data
+      - name: div-fn-remainder
+        valueFrom:
+          path: /outputs/remainder/data
